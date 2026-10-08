@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import timedelta
+from datetime import timedelta, date
+import calendar
 
 st.set_page_config(page_title="渠道销量 & GMV 看板", layout="wide")
 st.title("📊 渠道销量 & GMV 分析看板")
@@ -18,7 +19,8 @@ st.markdown("""
 uploaded_file = st.file_uploader("上传 Excel 文件（.xlsx）", type=["xlsx"])
 
 if uploaded_file:
-    df = pd.read_excel(uploaded_file, sheet_name=0)
+    # ---- dtype=str 避免超大整数溢出 ----
+    df = pd.read_excel(uploaded_file, sheet_name=0, dtype=str)
 
     # ---- 1. 数据清洗 ----
     df.columns = df.columns.str.strip()
@@ -72,7 +74,7 @@ if uploaded_file:
     df_filtered = df[df['渠道类型'].isin(['私域', '公域'])].copy()
 
     if df_filtered.empty:
-        st.warning("未找到「优选商城、企业采购、小红书、微信小店」的订单。")
+        st.warning("未找到「优选商城、企业采购、小红书、微信小店、抖店」的订单。")
         st.stop()
 
     # ---- 5. 提取日期 ----
@@ -86,11 +88,66 @@ if uploaded_file:
     st.markdown("---")
     st.subheader("📅 选择分析时间段")
 
+    # ---- 快捷按钮 ----
+    today = date.today()
+
+    def first_day_of_month(d):
+        return d.replace(day=1)
+
+    def last_day_of_month(d):
+        return d.replace(day=calendar.monthrange(d.year, d.month)[1])
+
+    def clamp(d, lo, hi):
+        return max(min(d, hi), lo)
+
+    # 数据变化时重置 session_state
+    range_key = f"{global_min}_{global_max}"
+    if st.session_state.get('range_key') != range_key:
+        st.session_state.start_date = global_min
+        st.session_state.end_date = global_max
+        st.session_state.range_key = range_key
+
+    # 快捷按钮区
+    col_q1, col_q2, col_q3, col_q4, col_q5 = st.columns(5)
+
+    with col_q1:
+        if st.button("📆 本月", use_container_width=True):
+            st.session_state.start_date = clamp(first_day_of_month(today), global_min, global_max)
+            st.session_state.end_date = clamp(last_day_of_month(today), global_min, global_max)
+    with col_q2:
+        if st.button("📅 上月", use_container_width=True):
+            last_m = first_day_of_month(today) - timedelta(days=1)
+            st.session_state.start_date = clamp(first_day_of_month(last_m), global_min, global_max)
+            st.session_state.end_date = clamp(last_day_of_month(last_m), global_min, global_max)
+    with col_q3:
+        if st.button("🗓 近7天", use_container_width=True):
+            st.session_state.start_date = clamp(today - timedelta(days=6), global_min, global_max)
+            st.session_state.end_date = clamp(today, global_min, global_max)
+    with col_q4:
+        if st.button("🗓 近30天", use_container_width=True):
+            st.session_state.start_date = clamp(today - timedelta(days=29), global_min, global_max)
+            st.session_state.end_date = clamp(today, global_min, global_max)
+    with col_q5:
+        if st.button("📊 全部", use_container_width=True):
+            st.session_state.start_date = global_min
+            st.session_state.end_date = global_max
+
+    # 日期选择器
     col_d1, col_d2 = st.columns(2)
     with col_d1:
-        start_date = st.date_input("开始日期", value=global_min, min_value=global_min, max_value=global_max)
+        start_date = st.date_input(
+            "开始日期",
+            min_value=global_min,
+            max_value=global_max,
+            key='start_date'
+        )
     with col_d2:
-        end_date = st.date_input("结束日期", value=global_max, min_value=global_min, max_value=global_max)
+        end_date = st.date_input(
+            "结束日期",
+            min_value=global_min,
+            max_value=global_max,
+            key='end_date'
+        )
 
     if start_date > end_date:
         st.error("开始日期不能晚于结束日期，请重新选择。")
@@ -109,11 +166,47 @@ if uploaded_file:
 
     # ===================== 环比分析 =====================
     st.markdown("---")
-    st.subheader("📈 环比分析（与上一等长周期对比）")
+    st.subheader("📈 环比分析（与上一对比周期对比）")
 
-    # 对比周期
-    prev_end = start_date - timedelta(days=1)
-    prev_start = prev_end - timedelta(days=current_days - 1)
+    # ---- 对比方式选择 ----
+    compare_mode = st.radio(
+        "选择对比方式：",
+        ['智能（整月自动对比上月）', '按自然月', '按天数'],
+        horizontal=True,
+        index=0
+    )
+
+    def is_full_month(sd, ed):
+        if sd.day != 1:
+            return False
+        last_day = calendar.monthrange(ed.year, ed.month)[1]
+        if ed.day != last_day:
+            return False
+        if sd.year != ed.year or sd.month != ed.month:
+            return False
+        return True
+
+    def get_prev_period(sd, ed, mode):
+        if mode == '智能（整月自动对比上月）':
+            actual_mode = 'month' if is_full_month(sd, ed) else 'days'
+        elif mode == '按自然月':
+            actual_mode = 'month'
+        else:
+            actual_mode = 'days'
+
+        if actual_mode == 'month':
+            first_of_this_month = sd.replace(day=1)
+            prev_month_end = first_of_this_month - timedelta(days=1)
+            prev_month_start = prev_month_end.replace(day=1)
+            return prev_month_start, prev_month_end, '自然月'
+        else:
+            days = (ed - sd).days + 1
+            prev_end = sd - timedelta(days=1)
+            prev_start = prev_end - timedelta(days=days - 1)
+            return prev_start, prev_end, '按天数'
+
+    prev_start, prev_end, actual_mode = get_prev_period(start_date, end_date, compare_mode)
+
     mask_prev = (df_filtered['日期'] >= prev_start) & (df_filtered['日期'] <= prev_end)
     prev_df = df_filtered[mask_prev]
 
@@ -135,40 +228,36 @@ if uploaded_file:
             return float('inf') if current > 0 else 0
         return (current - prev) / prev * 100
 
-    st.caption(f"对比周期：{prev_start.strftime('%Y-%m-%d')} ~ {prev_end.strftime('%Y-%m-%d')}（若无数据则显示为0）")
+    st.caption(f"对比周期（{actual_mode}）：{prev_start.strftime('%Y-%m-%d')} ~ {prev_end.strftime('%Y-%m-%d')}（若无数据则显示为0）")
 
     # ---- 四个指标卡 ----
     col_m1, col_m2, col_m3, col_m4 = st.columns(4)
 
-    # 有效GMV
     delta_val = current_metrics['有效GMV'] - prev_metrics['有效GMV']
     pct = calc_mom(current_metrics['有效GMV'], prev_metrics['有效GMV'])
     delta_str = f"{delta_val:+,.2f} ({pct:+.2f}%)" if pct != float('inf') else "无上期数据"
     with col_m1:
         st.metric("💰 有效GMV", f"{current_metrics['有效GMV']:,.2f}", delta=delta_str)
 
-    # 券后GMV
     delta_val = current_metrics['券后GMV'] - prev_metrics['券后GMV']
     pct = calc_mom(current_metrics['券后GMV'], prev_metrics['券后GMV'])
     delta_str = f"{delta_val:+,.2f} ({pct:+.2f}%)" if pct != float('inf') else "无上期数据"
     with col_m2:
         st.metric("🎫 券后GMV", f"{current_metrics['券后GMV']:,.2f}", delta=delta_str)
 
-    # 销量
     delta_val = current_metrics['销量'] - prev_metrics['销量']
     pct = calc_mom(current_metrics['销量'], prev_metrics['销量'])
     delta_str = f"{delta_val:+,.0f} ({pct:+.2f}%)" if pct != float('inf') else "无上期数据"
     with col_m3:
         st.metric("📦 销量（订单件数）", f"{current_metrics['销量']:,.0f}", delta=delta_str)
 
-    # 轻舟眠销售数量
     delta_val = current_metrics['轻舟眠销售数量'] - prev_metrics['轻舟眠销售数量']
     pct = calc_mom(current_metrics['轻舟眠销售数量'], prev_metrics['轻舟眠销售数量'])
     delta_str = f"{delta_val:+,.0f} ({pct:+.2f}%)" if pct != float('inf') else "无上期数据"
     with col_m4:
         st.metric("🛏️ 轻舟眠销售数量", f"{current_metrics['轻舟眠销售数量']:,.0f}", delta=delta_str)
 
-    # ---- 环比对比明细表（指标、当前、对比、变化值、环比%） ----
+    # ---- 环比对比明细表 ----
     compare_df = pd.DataFrame({
         '指标': ['销量', '有效GMV', '券后GMV', '轻舟眠销售数量'],
         '当前周期': [current_metrics['销量'], current_metrics['有效GMV'], current_metrics['券后GMV'], current_metrics['轻舟眠销售数量']],
@@ -181,7 +270,6 @@ if uploaded_file:
     )
     compare_df['环比(%)'] = compare_df['环比数值'].apply(lambda x: f"{x:+.2f}%" if x != float('inf') else "无上期数据")
 
-    # 颜色样式
     def color_change(val):
         if isinstance(val, (int, float)):
             if val > 0:
@@ -291,9 +379,13 @@ if uploaded_file:
     else:
         st.info("所选时间段内无私域数据。")
 
-    # 调试信息
+    # 调试信息（防止大整数溢出，统一转字符串）
     with st.expander("🔍 查看当前所选时间段数据预览（前10行）"):
-        st.dataframe(current_df.head(10))
+        preview_df = current_df.head(10).copy()
+        for col in preview_df.columns:
+            if preview_df[col].dtype == 'object':
+                preview_df[col] = preview_df[col].astype(str)
+        st.dataframe(preview_df)
 
 else:
     st.info("👆 请上传 Excel 文件以开始分析")
