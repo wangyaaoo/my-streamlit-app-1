@@ -9,7 +9,7 @@ st.title("📊 渠道销量 & GMV 分析看板")
 st.markdown("""
 **口径说明**：
 - 私域 = 优选商城 + 企业采购
-- 公域 = 小红书 + 微信小店 + 抖店
+- 公域 = 小红书 + 微信小店 + 抖店 + 京东商城
 - 只统计 **商品名称包含“轻舟眠”** 的订单
 - **轻舟眠销售数量** = 销量 × 规格系数（单只装=1，一对装=2）
 - GMV 同时展示 **有效GMV** 和 **券后GMV**
@@ -59,7 +59,7 @@ if uploaded_file:
 
     # ---- 4. 公域/私域分类 ----
     private_list = ['优选商城', '企业采购']
-    public_list = ['小红书', '微信小店', '抖店']
+    public_list = ['小红书', '微信小店', '抖店', '京东商城']
     df['销售渠道_clean'] = df['销售渠道'].str.strip()
 
     def classify_channel(channel):
@@ -74,7 +74,7 @@ if uploaded_file:
     df_filtered = df[df['渠道类型'].isin(['私域', '公域'])].copy()
 
     if df_filtered.empty:
-        st.warning("未找到「优选商城、企业采购、小红书、微信小店、抖店」的订单。")
+        st.warning("未找到「优选商城、企业采购、小红书、微信小店、抖店、京东商城」的订单。")
         st.stop()
 
     # ---- 5. 提取日期 ----
